@@ -1,0 +1,570 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Azure Document Intelligence Prebuilt Layout Model Output",
+    "description": "JSON schema for the output of the Azure Document Intelligence prebuilt layout analysis model. It defines the structure of the extracted content, layout, and structural elements from an analyzed document.",
+    "type": "object",
+    "properties": {
+      "apiVersion": {
+        "type": "string",
+        "description": "The REST API version used for the analysis (e.g., \"2023-07-31\")."
+      },
+      "modelId": {
+        "type": "string",
+        "description": "Identifier of the model used for analysis (e.g., \"prebuilt-layout\" or a model ID GUID)."
+      },
+      "stringIndexType": {
+        "type": "string",
+        "description": "The unit used for string offsets in spans. Possible values are \"textElements\" (grapheme clusters), \"unicodeCodePoint\", or \"utf16CodeUnit\".",
+        "enum": ["textElements", "unicodeCodePoint", "utf16CodeUnit"]
+      },
+      "content": {
+        "type": "string",
+        "description": "The full extracted text content of the document, including whitespace and line breaks."
+      },
+      "pages": {
+        "type": "array",
+        "description": "List of pages in the document and their layout details.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "pageNumber": {
+              "type": "integer",
+              "description": "The 1-based page number of this page in the document."
+            },
+            "angle": {
+              "type": "number",
+              "description": "Rotation of the page in degrees clockwise (e.g., 0, 90, 180).",
+              "minimum": 0,
+              "maximum": 360
+            },
+            "width": {
+              "type": "number",
+              "description": "The width of the page in the specified unit."
+            },
+            "height": {
+              "type": "number",
+              "description": "The height of the page in the specified unit."
+            },
+            "unit": {
+              "type": "string",
+              "description": "The unit of measurement for page dimensions and coordinates (e.g., \"pixel\" or \"inch\").",
+              "enum": ["pixel", "inch"]
+            },
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full content that belong to this page. Each span indicates the start offset and length of text in the full content that appears on this page.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": {
+                    "type": "integer",
+                    "description": "The starting position of this page's content in the full document text.",
+                    "minimum": 0
+                  },
+                  "length": {
+                    "type": "integer",
+                    "description": "The length (number of characters) of this page's content in the full document text.",
+                    "minimum": 0
+                  }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "lines": {
+              "type": "array",
+              "description": "Recognized text lines on this page.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "The text content of the line as extracted from the page."
+                  },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Coordinates of the quadrilateral bounding polygon for the line, as [x1, y1, x2, y2, ..., x4, y4].",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  },
+                  "spans": {
+                    "type": "array",
+                    "description": "Span(s) of the full document content corresponding to this line of text.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "length": { "type": "integer", "minimum": 0 }
+                      },
+                      "required": ["offset", "length"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["content"],
+                "additionalProperties": false
+              }
+            },
+            "words": {
+              "type": "array",
+              "description": "Recognized individual words on this page with their bounding coordinates and confidence scores.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "The text content of the word."
+                  },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Bounding polygon coordinates for the word on the page (eight numbers, four points).",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "description": "Confidence score of the word recognition (0.0 to 1.0).",
+                    "minimum": 0.0,
+                    "maximum": 1.0
+                  },
+                  "span": {
+                    "type": "object",
+                    "description": "Span of the full content corresponding to this word (offset and length in the document text).",
+                    "properties": {
+                      "offset": { "type": "integer", "minimum": 0 },
+                      "length": { "type": "integer", "minimum": 0 }
+                    },
+                    "required": ["offset", "length"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["content", "confidence"],
+                "additionalProperties": false
+              }
+            },
+            "selectionMarks": {
+              "type": "array",
+              "description": "Detected selection marks (e.g., checkboxes or radio buttons) on this page.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "description": "The state of the selection mark, either \"selected\" or \"unselected\".",
+                    "enum": ["selected", "unselected"]
+                  },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Bounding polygon coordinates for the selection mark on the page.",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "description": "Confidence score of the selection mark detection (0.0 to 1.0).",
+                    "minimum": 0.0,
+                    "maximum": 1.0
+                  },
+                  "span": {
+                    "type": "object",
+                    "description": "Span of the full document content corresponding to this selection mark's text representation (e.g., indices of \":selected:\" or \":unselected:\" tokens).",
+                    "properties": {
+                      "offset": { "type": "integer", "minimum": 0 },
+                      "length": { "type": "integer", "minimum": 0 }
+                    },
+                    "required": ["offset", "length"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["state", "confidence"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["pageNumber", "width", "height", "unit"],
+          "additionalProperties": false
+        }
+      },
+      "languages": {
+        "type": "array",
+        "description": "Languages detected in the document.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "locale": {
+              "type": "string",
+              "description": "Language tag (locale) for the text (e.g., \"en\", \"en-US\", \"fr\", etc.)."
+            },
+            "confidence": {
+              "type": "number",
+              "description": "Confidence score for this language identification (0.0 to 1.0).",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full content that are in this language. If omitted, the language applies to the entire document.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["locale", "confidence"],
+          "additionalProperties": false
+        }
+      },
+      "paragraphs": {
+        "type": "array",
+        "description": "Paragraphs of text identified in the document, with logical roles if applicable.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "The full text content of the paragraph."
+            },
+            "boundingRegions": {
+              "type": "array",
+              "description": "Bounding region(s) covering this paragraph on the page(s).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pageNumber": { "type": "integer" },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Polygon coordinates outlining the paragraph area on the page.",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  }
+                },
+                "required": ["pageNumber", "polygon"],
+                "additionalProperties": false
+              }
+            },
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full document content corresponding to this paragraph.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "role": {
+              "type": "string",
+              "description": "Logical role of the paragraph, if recognized (e.g., \"title\", \"sectionHeading\", \"pageHeader\", \"pageFooter\", \"pageNumber\", \"footnote\").",
+              "enum": ["title", "sectionHeading", "pageHeader", "pageFooter", "pageNumber", "footnote"]
+            }
+          },
+          "required": ["content", "spans"],
+          "additionalProperties": false
+        }
+      },
+      "tables": {
+        "type": "array",
+        "description": "Tables extracted from the document.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "rowCount": {
+              "type": "integer",
+              "description": "Number of rows in the table."
+            },
+            "columnCount": {
+              "type": "integer",
+              "description": "Number of columns in the table."
+            },
+            "boundingRegions": {
+              "type": "array",
+              "description": "Bounding region(s) covering the table on the page(s).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pageNumber": { "type": "integer" },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Polygon coordinates outlining the table on the page.",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  }
+                },
+                "required": ["pageNumber", "polygon"],
+                "additionalProperties": false
+              }
+            },
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full content corresponding to the entire table.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "cells": {
+              "type": "array",
+              "description": "Cells of the table, with content and layout for each cell.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rowIndex": {
+                    "type": "integer",
+                    "description": "Zero-based row index of the cell."
+                  },
+                  "columnIndex": {
+                    "type": "integer",
+                    "description": "Zero-based column index of the cell."
+                  },
+                  "rowSpan": {
+                    "type": "integer",
+                    "description": "Number of rows this cell spans (if >1).",
+                    "minimum": 1
+                  },
+                  "columnSpan": {
+                    "type": "integer",
+                    "description": "Number of columns this cell spans (if >1).",
+                    "minimum": 1
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "The text content of the cell (empty if the cell contains a non-text element)."
+                  },
+                  "boundingRegions": {
+                    "type": "array",
+                    "description": "Bounding region(s) covering this cell.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "pageNumber": { "type": "integer" },
+                        "polygon": {
+                          "type": "array",
+                          "description": "Polygon coordinates outlining this cell on the page.",
+                          "items": { "type": "number" },
+                          "minItems": 8,
+                          "maxItems": 8
+                        }
+                      },
+                      "required": ["pageNumber", "polygon"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "spans": {
+                    "type": "array",
+                    "description": "Span(s) of the full document content corresponding to this cell's text.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "length": { "type": "integer", "minimum": 0 }
+                      },
+                      "required": ["offset", "length"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "Type of content in the cell (e.g., \"columnHeader\" for a header cell, or other types like \"content\" or \"footnote\")."
+                  },
+                  "elements": {
+                    "type": "array",
+                    "description": "References to other extracted elements (such as a figure or a nested table) contained in this cell, if any. Each is a JSON pointer to an element in the document.",
+                    "items": { "type": "string" }
+                  }
+                },
+                "required": ["rowIndex", "columnIndex"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["rowCount", "columnCount", "cells"],
+          "additionalProperties": false
+        }
+      },
+      "figures": {
+        "type": "array",
+        "description": "Figures (images or diagrams) detected in the document.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Unique identifier for this figure."
+            },
+            "boundingRegions": {
+              "type": "array",
+              "description": "Bounding region(s) covering the figure on the page.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pageNumber": { "type": "integer" },
+                  "polygon": {
+                    "type": "array",
+                    "description": "Polygon coordinates outlining the figure on the page.",
+                    "items": { "type": "number" },
+                    "minItems": 8,
+                    "maxItems": 8
+                  }
+                },
+                "required": ["pageNumber", "polygon"],
+                "additionalProperties": false
+              }
+            },
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full content corresponding to where this figure is referenced in text (if applicable).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "elements": {
+              "type": "array",
+              "description": "References to elements that are part of this figure (e.g., paragraphs inside the figure).",
+              "items": { "type": "string" }
+            },
+            "caption": {
+              "type": "object",
+              "description": "Caption or title for the figure, if present.",
+              "properties": {
+                "content": {
+                  "type": "string",
+                  "description": "Text content of the figure's caption."
+                },
+                "boundingRegions": {
+                  "type": "array",
+                  "description": "Bounding region(s) covering the caption on the page.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "pageNumber": { "type": "integer" },
+                      "polygon": {
+                        "type": "array",
+                        "description": "Polygon coordinates outlining the caption text area on the page.",
+                        "items": { "type": "number" },
+                        "minItems": 8,
+                        "maxItems": 8
+                      }
+                    },
+                    "required": ["pageNumber", "polygon"],
+                    "additionalProperties": false
+                  }
+                },
+                "spans": {
+                  "type": "array",
+                  "description": "Span(s) of the full content corresponding to the caption text.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "offset": { "type": "integer", "minimum": 0 },
+                      "length": { "type": "integer", "minimum": 0 }
+                    },
+                    "required": ["offset", "length"],
+                    "additionalProperties": false
+                  }
+                },
+                "elements": {
+                  "type": "array",
+                  "description": "References to elements (paragraphs) that comprise the caption text.",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["content", "spans"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["id", "boundingRegions"],
+          "additionalProperties": false
+        }
+      },
+      "sections": {
+        "type": "array",
+        "description": "Document sections representing hierarchical structure (like chapters or sections with nested content).",
+        "items": {
+          "type": "object",
+          "properties": {
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full document content covered by this section.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "elements": {
+              "type": "array",
+              "description": "References to the elements (paragraphs or sub-sections) that are part of this section.",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["elements"],
+          "additionalProperties": false
+        }
+      },
+      "styles": {
+        "type": "array",
+        "description": "Text style attributes detected in the document (e.g., handwriting).",
+        "items": {
+          "type": "object",
+          "properties": {
+            "spans": {
+              "type": "array",
+              "description": "Span(s) of the full content that have this style.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "length": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["offset", "length"],
+                "additionalProperties": false
+              }
+            },
+            "confidence": {
+              "type": "number",
+              "description": "Confidence that the style is correctly identified in this span.",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "isHandwritten": {
+              "type": "boolean",
+              "description": "Indicates if the text in the span is handwritten (true) or not (false)."
+            }
+          },
+          "required": ["spans", "confidence"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["modelId", "content", "pages"],
+    "additionalProperties": false
+  }
+  
