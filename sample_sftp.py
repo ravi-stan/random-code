@@ -2,6 +2,25 @@ from pathlib import Path
 from typing import Iterable, Union
 from PIL import Image, TiffImagePlugin
 import warnings
+import math
+
+def _bytes_per_pixel(mode: str) -> float:
+    """Return the raw bytes per pixel for common Pillow modes."""
+    # 8-bit channels unless noted
+    table = {
+        "1": 1 / 8,     # 1-bit bilevel
+        "L": 1,         # 8-bit greyscale
+        "P": 1,         # 8-bit palette
+        "RGB": 3,
+        "RGBA": 4,
+        "CMYK": 4,
+        "I;16": 2,      # 16-bit unsigned integer
+        "I": 4,         # 32-bit signed integer
+        "F": 4,         # 32-bit float
+    }
+    if mode not in table:
+        raise ValueError(f"Unsupported mode {mode!r} for size estimation")
+    return table[mode]
 
 def combine_tiffs_preview_safe(
     input_files: Iterable[Union[str, Path]],
@@ -9,61 +28,56 @@ def combine_tiffs_preview_safe(
     *,
     mode: str = "RGB",
     dpi: tuple[int, int] = (300, 300),
+    size_limit_gb: int = 4,
 ) -> Path:
     """
-    Merge single-page TIFFs into a multi-page TIFF that macOS Preview
-    can open.  Requirements enforced:
-
-    * classic TIFF header (≤ 4 GB)
-    * LZW-compressed **strip** layout (no tiles)
-    * identical size / bit depth / DPI across pages
+    Merge single-page TIFFs into a multi-page baseline-strip TIFF that
+    macOS Preview can open (classic header, LZW strips).
     """
-
-    files = [Path(f) for f in input_files]
-    if not files:
+    paths = [Path(p) for p in input_files]
+    if not paths:
         raise ValueError("No input files provided.")
 
-    # --- 1. Load every page fully and validate uniformity -------------
     pages = []
     w = h = None
-    for fp in files:
-        with Image.open(fp) as im:
+    for p in paths:
+        with Image.open(p) as im:
             if im.mode != mode:
                 im = im.convert(mode)
-            im.load()                    # detach from underlying file
+            im.load()               # fully detach from source file
             if w is None:
                 w, h = im.size
             elif im.size != (w, h):
                 raise ValueError(
-                    f"Page {fp.name} size {im.size} differs from "
-                    f"first page {(w, h)} – Preview can't handle that."
+                    f"Page {p.name} is {im.size}, "
+                    f"first page is {(w, h)} – Preview needs uniform size."
                 )
             im.info["dpi"] = dpi
-            pages.append(im.copy())      # keep a copy open after fp closes
+            pages.append(im.copy())
 
-    # --- 2. Pillow's own writer → guaranteed baseline strips ----------
-    TiffImagePlugin.WRITE_LIBTIFF = False     # force Pillow writer
-    save_kwargs = dict(
+    # ---- 4 GB guard ---------------------------------------------------
+    bpp   = _bytes_per_pixel(mode)
+    est   = math.ceil(w * h * bpp * len(pages))        # raw byte estimate
+    limit = size_limit_gb * 1024 ** 3
+    compress = "tiff_lzw"
+    if est >= limit:
+        warnings.warn(
+            "Estimated uncompressed size exceeds classic TIFF limit. "
+            "Falling back to uncompressed strips so we can still write "
+            "a Preview-readable classic TIFF (file will be large)."
+        )
+        compress = "raw"  # Pillow keyword for “none”
+
+    # ---- write with Pillow’s baseline-strip encoder -------------------
+    TiffImagePlugin.WRITE_LIBTIFF = False  # force baseline writer
+    pages[0].save(
+        output_path,
         save_all=True,
         append_images=pages[1:],
-        compression="tiff_lzw",              # Baseline, Preview-safe
+        compression=compress,
         dpi=dpi,
     )
 
-    # Pillow can't create BigTIFF; if > 4 GB fall back to no compression
-    est_size = sum(p.nbytes for p in pages)
-    if est_size >= 4 * 1024 ** 3:
-        warnings.warn(
-            "Output would exceed classic-TIFF 4 GB limit; "
-            "falling back to uncompressed strips."
-        )
-        save_kwargs["compression"] = "raw"   # 'none' in Pillow
-
-    pages[0].save(output_path, **save_kwargs)
-
-    # --- 3. Clean-up ---------------------------------------------------
-    for p in pages:
-        p.close()
-
+    for im in pages:
+        im.close()
     return Path(output_path)
-
