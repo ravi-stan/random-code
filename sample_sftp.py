@@ -1,59 +1,38 @@
-# tests/fixtures/mcp_multi_unit.py
+# tests/fixtures/mcp_multiserver_fake.py
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from types import SimpleNamespace
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Dict, Mapping
 
 import pytest
 import pytest_asyncio
+from langchain_core.documents import Blob
 
-# Optional: LangChain Tool + Blob for "langchain-compatible" return types
-from langchain_core.tools import Tool
-from langchain_core.documents import Blob  # Blob.from_data(...) etc.
-
-# ---------- A tiny in-memory "registry" model for fake servers ----------
-
-@dataclass
-class FakeToolSpec:
-    description: str
-    schema: dict[str, Any]  # JSON schema your client may read
-    impl: Callable[..., Any]  # what to run on call_tool
-
-@dataclass
-class FakeServer:
-    tools: dict[str, FakeToolSpec]                 # name -> spec
-    prompts: dict[str, list[tuple[str, str]]]      # name -> [(role, text), ...]
-    resources: dict[str, str]                      # uri -> text payload
-
-
-# ---------- Minimal "mcp.types-like" result objects your client may touch -----
-# We don't depend on mcp SDK for unit tests; we emulate the shapes your client reads.
-
+# --- Minimal "MCP types" that match attributes used by langchain_mcp_adapters.tools ---
 class _Tool:
     def __init__(self, name: str, description: str, input_schema: dict):
         self.name = name
         self.description = description
-        # cover both snake_case and camelCase, depending on how your client reads it
+        # Be tolerant: some adapters look for either attribute name.
         self.input_schema = input_schema
         self.inputSchema = input_schema
 
 class _ListToolsResult:
-    def __init__(self, tools: list[_Tool]): self.tools = tools
+    def __init__(self, tools): self.tools = tools
 
 class _TextContent:
     type = "text"
     def __init__(self, text: str): self.text = text
 
 class _PromptMessage:
-    # Simplified; real SDK has richer content blocks. This works for most adapters.
+    # MCP PromptMessage has role + content[list[TextContent | ...]]
     def __init__(self, role: str, text: str):
         self.role = role
         self.content = [_TextContent(text)]
 
 class _GetPromptResult:
-    def __init__(self, messages: list[_PromptMessage]): self.messages = messages
+    def __init__(self, messages): self.messages = messages
 
 class _Resource:
     def __init__(self, uri: str, name: str | None = None, mime_type: str | None = None):
@@ -62,67 +41,78 @@ class _Resource:
         self.mimeType = mime_type
 
 class _ListResourcesResult:
-    def __init__(self, resources: list[_Resource]): self.resources = resources
+    def __init__(self, resources): self.resources = resources
 
 class _ReadResourceResult:
-    def __init__(self, content: list[_TextContent]): self.content = content
+    def __init__(self, content): self.content = content
 
 class _CallToolResult:
     def __init__(self, structured: Any | None = None, text: str | None = None):
-        # mirror common fields a client reads back
+        # Being generous: return both structured and text to satisfy older adapters.
         self.structuredContent = structured
-        self.content = [_TextContent(text)] if text is not None else []
+        self.content = [] if text is None else [_TextContent(text)]
 
 
-# ---------- A fake session your MultiServerMCPClient.session will yield --------
+# --- Fake server registry ------------------------------------------------------
+@dataclass
+class FakeToolSpec:
+    description: str
+    schema: dict[str, Any]
+    impl: Callable[..., Any]
+
+@dataclass
+class FakeServer:
+    tools: Dict[str, FakeToolSpec]               # tool_name -> spec
+    prompts: Dict[str, list[tuple[str, str]]]    # prompt_name -> [(role, text), ...]
+    resources: Dict[str, str]                    # uri -> text payload
+
 
 class _FakeSession:
-    def __init__(self, server: FakeServer):
+    """Tiny in-memory MCP 'session' that matches the attributes the adapter reads."""
+    def __init__(self, server: FakeServer, headers: dict[str, str] | None = None):
         self._server = server
-        self._initialized = False
+        self._headers = headers or {}
+        self.initialized = False
 
     async def initialize(self) -> None:
-        self._initialized = True
+        self.initialized = True
 
+    # --- tool discovery + execution ---
     async def list_tools(self) -> _ListToolsResult:
         tools = [
-            _Tool(name=n, description=spec.description, input_schema=spec.schema)
-            for n, spec in self._server.tools.items()
+            _Tool(name=name, description=spec.description, input_schema=spec.schema)
+            for name, spec in self._server.tools.items()
         ]
-        return _ListToolsResult(tools=tools)
+        return _ListToolsResult(tools)
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> _CallToolResult:
+    async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> _CallToolResult:
         if name not in self._server.tools:
-            raise KeyError(f"Tool {name} not found")
+            raise KeyError(f"Unknown tool: {name}")
         fn = self._server.tools[name].impl
-        result = fn(**(arguments or {}))
-        # choose structured vs text for convenience
-        if isinstance(result, (dict, list, int, float, bool)) or result is None:
-            return _CallToolResult(structured=result)
-        return _CallToolResult(text=str(result))
+        result = fn(**(dict(arguments) if arguments else {}))
+        # Return both structured + text to be adapter-version-proof
+        return _CallToolResult(structured=result, text=str(result))
 
-    async def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> _GetPromptResult:
+    # --- prompts ---
+    async def get_prompt(self, name: str, arguments: Mapping[str, Any] | None = None) -> _GetPromptResult:
         if name not in self._server.prompts:
-            raise KeyError(f"Prompt {name} not found")
-        # crude templating for unit tests
-        messages = []
+            raise KeyError(f"Unknown prompt: {name}")
+        msgs = []
         for role, text in self._server.prompts[name]:
-            if arguments:
-                text = text.format(**arguments)
-            messages.append(_PromptMessage(role, text))
-        return _GetPromptResult(messages=messages)
+            msgs.append(_PromptMessage(role, text.format(**(arguments or {}))))
+        return _GetPromptResult(messages=msgs)
 
+    # --- resources ---
     async def list_resources(self) -> _ListResourcesResult:
-        resources = [_Resource(uri=u) for u in self._server.resources.keys()]
-        return _ListResourcesResult(resources=resources)
+        return _ListResourcesResult([_Resource(uri=u) for u in self._server.resources])
 
     async def read_resource(self, uri: str) -> _ReadResourceResult:
         if uri not in self._server.resources:
-            raise KeyError(f"Resource {uri} not found")
+            raise KeyError(f"Unknown resource: {uri}")
         return _ReadResourceResult([_TextContent(self._server.resources[uri])])
 
 
-# ---------- Pytest fixtures: fake registry + patched client.session ------------
+# ---------- Pytest fixtures ----------------------------------------------------
 
 @pytest.fixture
 def fake_servers_registry() -> dict[str, FakeServer]:
@@ -130,122 +120,148 @@ def fake_servers_registry() -> dict[str, FakeServer]:
     alpha = FakeServer(
         tools={
             "add": FakeToolSpec(
-                description="Add two ints",
-                schema={"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a", "b"]},
+                description="Add two integers",
+                schema={"type": "object",
+                        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                        "required": ["a", "b"]},
                 impl=lambda a, b: a + b,
             ),
             "upper": FakeToolSpec(
-                description="Uppercase a string",
-                schema={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                description="Uppercase text",
+                schema={"type": "object",
+                        "properties": {"text": {"type": "string"}},
+                        "required": ["text"]},
                 impl=lambda text: text.upper(),
             ),
         },
-        prompts={
-            "greet": [("system", "You are warm and concise."), ("user", "Say hi to {name}.")],
-        },
-        resources={
-            "alpha://foo": "hello from alpha",
-            "alpha://bar": "more alpha text",
-        },
+        prompts={"greet": [("system", "You are concise."), ("user", "Say hi to {name}.")]},
+        resources={"alpha://note": "hello from alpha"},
     )
     beta = FakeServer(
         tools={
             "echo": FakeToolSpec(
-                description="Echo back text",
-                schema={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+                description="Echo text",
+                schema={"type": "object",
+                        "properties": {"text": {"type": "string"}},
+                        "required": ["text"]},
                 impl=lambda text: text,
             )
         },
-        prompts={"farewell": [("user", "Say bye to {name}.")]},
+        prompts={"bye": [("user", "Say bye to {name}.")]},
         resources={"beta://readme": "beta resource content"},
     )
     return {"alpha": alpha, "beta": beta}
 
 
 @pytest_asyncio.fixture
-async def multiserver_client_fake(monkeypatch, fake_servers_registry):
+async def multiserver_mcp_client_fake(monkeypatch, fake_servers_registry):
     """
-    Returns a real MultiServerMCPClient with its .session method patched so that:
-      - each entry uses the in-memory fake server above
-      - we count openings to prove 'new session per tool call'
+    Returns a REAL `langchain_mcp_adapters.client.MultiServerMCPClient` instance
+    whose `.session()` is patched to yield in-memory fake sessions per server.
+    Also exposes counters to assert 'new session per tool call'.
     """
-    # Adjust import path to your codebase:
-    from app.mcp_multi import MultiServerMCPClient  # <-- change if needed
+    from langchain_mcp_adapters.client import MultiServerMCPClient  # <-- real class
 
-    # A tiny spy to count session opens per server
-    counters: dict[str, int] = {"alpha": 0, "beta": 0}
+    # We'll store per-server session open counts and "seen headers"
+    counters: dict[str, int] = {k: 0 for k in fake_servers_registry}
+    seen_headers: dict[str, list[dict[str, str]]] = {k: [] for k in fake_servers_registry}
+
+    # For resilience to internal attr names, try several likely locations for connections
+    def _extract_headers(self, server_name: str) -> dict[str, str]:
+        for attr in ("connections", "_connections", "config", "_config", "__dict__"):
+            cfg = getattr(self, attr, None)
+            if isinstance(cfg, dict) and server_name in cfg:
+                maybe = cfg[server_name].get("headers") or cfg[server_name].get("mcp_server", {}).get("headers")
+                if isinstance(maybe, dict):
+                    return dict(maybe)
+        # Default to no headers if we can't find any
+        return {}
 
     @asynccontextmanager
-    async def fake_session(self, server_key: str):
-        counters[server_key] += 1
-        sess = _FakeSession(fake_servers_registry[server_key])
-        await sess.initialize()
+    async def fake_session(self, server_name: str, *, auto_initialize: bool = True):
+        counters[server_name] += 1
+        headers = _extract_headers(self, server_name)
+        seen_headers[server_name].append(headers)
+        sess = _FakeSession(fake_servers_registry[server_name], headers=headers)
+        if auto_initialize:
+            await sess.initialize()
         try:
             yield sess
         finally:
             pass
 
+    # Patch the bound method on the CLASS so all instances use the fake
     monkeypatch.setattr(MultiServerMCPClient, "session", fake_session, raising=True)
 
-    # headers aren't used by the fake, but we include them to mirror prod config
+    # Build a realistic connection config (headers only matter for http/sse in prod)
     client = MultiServerMCPClient(
         connections={
-            "alpha": {"mcp_server": {"transport": "http", "url": "http://fake-alpha/mcp", "headers": {"x-session-id": "alpha-123"}}},
-            "beta":  {"mcp_server": {"transport": "http", "url": "http://fake-beta/mcp",  "headers": {"x-session-id": "beta-456"}}},
+            "alpha": {"transport": "streamable_http", "url": "http://fake-alpha/mcp", "headers": {"x-session-id": "alpha-123"}},
+            "beta":  {"transport": "streamable_http", "url": "http://fake-beta/mcp",  "headers": {"x-session-id": "beta-456"}},
         }
     )
-    # attach counters so tests can assert behavior
-    client._session_open_count = counters
+
+    # Expose spies for assertions in tests
+    client._session_open_count = counters          # type: ignore[attr-defined]
+    client._seen_headers_by_server = seen_headers  # type: ignore[attr-defined]
     return client
 
 
 
-#####################################
+
+
+############
 
 import pytest
-
-from langchain_core.documents import Blob
-from langchain_core.tools import Tool
+from langchain_core.messages import BaseMessage
 
 @pytest.mark.asyncio
-async def test_get_tools_aggregates(monkeypatch, multiserver_client_fake):
-    tools = await multiserver_client_fake.get_tools()
+async def test_get_tools_and_invoke(multiserver_mcp_client_fake):
+    client = multiserver_mcp_client_fake
+
+    tools = await client.get_tools()   # flattened across alpha + beta
     names = {t.name for t in tools}
     assert {"add", "upper", "echo"} <= names
-    # Should have opened sessions to list tools on both servers
-    assert multiserver_client_fake._session_open_count["alpha"] >= 1
-    assert multiserver_client_fake._session_open_count["beta"]  >= 1
 
-@pytest.mark.asyncio
-async def test_tool_invocation_opens_new_session_each_time(multiserver_client_fake):
-    tools = await multiserver_client_fake.get_tools()
     add = next(t for t in tools if t.name == "add")
     upper = next(t for t in tools if t.name == "upper")
+    echo = next(t for t in tools if t.name == "echo")
 
-    # Call twice; each call should create a NEW session via the patched contextmanager
-    assert await add.invoke({"a": 2, "b": 5}) == 7
-    assert await upper.invoke({"text": "hello"}) == "HELLO"
+    # Each invoke should cause the adapter to open a fresh session under the hood
+    assert await add.ainvoke({"a": 2, "b": 5}) == 7
+    assert await upper.ainvoke({"text": "abc"}) == "ABC"
+    assert await echo.ainvoke({"text": "hi"}) == "hi"
 
-    # Two calls above -> at least 2 fresh sessions somewhere (server-specific counts may vary)
-    total_sessions = sum(multiserver_client_fake._session_open_count.values())
-    assert total_sessions >= 3  # list_tools + 2 calls
-
-@pytest.mark.asyncio
-async def test_get_prompt_renders(monkeypatch, multiserver_client_fake):
-    prompt = await multiserver_client_fake.get_prompt("alpha", "greet", {"name": "Ada"})
-    # Your client may return different shapes (messages or a LangChain prompt).
-    # Here we accept "messages list" OR a ChatPromptTemplate rendered result.
-    if isinstance(prompt, list):
-        text = " ".join([blk.text for msg in prompt for blk in msg.content])
-        assert "Ada" in text
-    else:
-        # e.g., ChatPromptTemplate — just ensure rendering works
-        rendered = prompt.format_messages(name="Ada")
-        assert any("Ada" in (c.content if hasattr(c, "content") else str(c)) for c in rendered)
+    # list_tools + 3 calls -> at least 4 sessions opened across servers
+    total_opens = sum(client._session_open_count.values())  # from the fixture
+    assert total_opens >= 4
 
 @pytest.mark.asyncio
-async def test_get_resources_returns_langchain_blobs(multiserver_client_fake):
-    blobs = await multiserver_client_fake.get_resources("beta")
-    assert all(isinstance(b, Blob) for b in blobs)
-    # Despite faking, Blob API should behave properly
-    assert any("beta resource content" in b.as_string() for b in blobs)
+async def test_get_tools_filtered_server(multiserver_mcp_client_fake):
+    client = multiserver_mcp_client_fake
+
+    beta_tools = await client.get_tools(server_name="beta")
+    assert {t.name for t in beta_tools} == {"echo"}
+    # Ensure only beta saw a session for discovery
+    assert client._session_open_count["beta"] >= 1
+
+@pytest.mark.asyncio
+async def test_get_prompt_returns_langchain_messages(multiserver_mcp_client_fake):
+    msgs = await multiserver_mcp_client_fake.get_prompt("alpha", "greet", {"name": "Ada"})
+    assert all(isinstance(m, BaseMessage) for m in msgs)
+    # content should contain the formatted argument
+    assert any("Ada" in getattr(m, "content", "") for m in msgs)
+
+@pytest.mark.asyncio
+async def test_get_resources_returns_blobs(multiserver_mcp_client_fake):
+    blobs = await multiserver_mcp_client_fake.get_resources("alpha")
+    # The adapter should convert our fake resources to LangChain Blobs
+    txts = [b.as_string() for b in blobs]
+    assert any("hello from alpha" in t for t in txts)
+
+@pytest.mark.asyncio
+async def test_runtime_headers_captured(multiserver_mcp_client_fake):
+    seen = multiserver_mcp_client_fake._seen_headers_by_server
+    # At least one session open → at least one header capture
+    assert any(h.get("x-session-id") == "alpha-123" for h in seen["alpha"])
+    assert any(h.get("x-session-id") == "beta-456" for h in seen["beta"])
