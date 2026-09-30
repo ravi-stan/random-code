@@ -1,0 +1,20 @@
+Build a technical overview of our application. It spans these repos in this folder:
+<repo-a>, <repo-b>, <repo-c>
+What I already know (optional): <e.g. repo-a = React frontend, repo-b = main API; ignore repo-old>
+Audience: <e.g. senior engineers new to the system>
+
+Keep token use minimal:
+1. Don't read code yourself. Launch one repo-scout subagent per repo, in parallel. Each task message contains only: the repo path, the full list of repo names (so it can spot cross-references), and my notes above.
+2. From the summaries, work out how the repos connect. For links that are still ambiguous you may run at most 5 targeted greps (files-only) across the repos; no other file reads.
+3. Write SYSTEM_OVERVIEW.md in this folder, max ~1,500 words plus one diagram:
+   - What the system does (≤5 sentences)
+   - Repo map table: repo | role | stack | runs as | depends on
+   - Architecture: one Mermaid flowchart of services, datastores, queues and external systems, edges labeled with protocol
+   - 2–3 key end-to-end flows as numbered steps (repos + endpoints/topics)
+   - Data ownership: which repo owns which store/entities
+   - Contracts & cross-cutting: where APIs/events are defined, auth, shared libs, config
+   - Build, deploy, environments, local dev (if known)
+   - Risks and cross-repo inconsistencies (version drift, duplicated logic, contract mismatches)
+   - Open questions
+   Mark anything inferred rather than seen as "(inferred)".
+4. Don't print the document in chat. Reply only with the file path and the open questions.
